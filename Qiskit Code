@@ -1,0 +1,59 @@
+import numpy as np
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit.quantum_info import SparsePauliOp
+from qiskit.circuit.library import PauliEvolutionGate
+from qiskit.primitives import StatevectorSampler
+from qiskit.visualization import plot_histogram
+
+def build_inverse_qft(circuit, n_counting):
+    for qubit in range(n_counting // 2):
+        circuit.swap(qubit, n_counting - qubit - 1)
+    for j in range(n_counting):
+        for m in range(j):
+            circuit.cp(-np.pi / float(2**(j - m)), m, j)
+        circuit.h(j)
+
+def build_qpe_circuit(hamiltonian, n_precision, t_step):
+    n_target = hamiltonian.num_qubits
+    qr_count = QuantumRegister(n_precision, 'count')
+    qr_target = QuantumRegister(n_target, 'target')
+    cr = ClassicalRegister(n_precision, 'bits')
+    qc = QuantumCircuit(qr_count, qr_target, cr)
+
+    qc.x(qr_target) 
+    qc.h(qr_count)
+
+    for k in range(n_precision):
+        evolution_time = t_step * (2**k)
+        evo_gate = PauliEvolutionGate(hamiltonian, time=evolution_time)
+        controlled_evo = evo_gate.control(1)
+        qc.append(controlled_evo, [qr_count[k]] + list(range(n_precision, n_precision + n_target)))
+
+    build_inverse_qft(qc, n_precision)
+
+    qc.measure(qr_count, cr)
+    return qc
+
+H = SparsePauliOp.from_list([("Z", 1.5)])
+precision_qubits = 4
+time_scaling = 1.0 
+
+qpe_circuit = build_qpe_circuit(H, precision_qubits, time_scaling)
+
+sampler = StatevectorSampler()
+pub = (qpe_circuit,)
+job = sampler.run([pub])
+result = job.result()[0]
+counts = result.data.bits.get_counts()
+
+print(f"Bitstring Counts: {counts}")
+
+most_likely_bitstring = max(counts, key=counts.get)
+integer_value = int(most_likely_bitstring, 2)
+measured_phase = integer_value / (2**precision_qubits)
+
+if measured_phase > 0.5:
+    measured_phase -= 1.0
+
+estimated_energy = -(measured_phase * 2 * np.pi) / time_scaling
+print(f"Estimated Energy: {estimated_energy:.4f}")
